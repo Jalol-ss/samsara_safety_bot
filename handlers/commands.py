@@ -140,6 +140,68 @@ async def on_recent(message: Message, command: CommandObject,
 
 
 # ---------- /list_webhooks ------------------------------------------
+# ---------- /scan --------------------------------------------------
+# Diagnostic: count every event type returned by Samsara in a window.
+# Doesn't post to topics. Useful for figuring out why /seed_each
+# landed only one topic — the fleet might simply not have triggered
+# the others.
+@router.message(Command("scan"))
+async def on_scan(message: Message, command: CommandObject,
+                  samsara: SamsaraClient, app_state: State) -> None:
+    days = 7
+    if command.args:
+        try: days = max(1, min(int(command.args.split()[0]), 30))
+        except (ValueError, IndexError): pass
+
+    end   = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    waiter = await message.reply(f"🔍 Scanning last {days}d of events…")
+
+    from engine.normalize import normalize_safety_event
+    by_type: dict[str, int]  = {}
+    by_topic: dict[str, int] = {}
+    with_media = 0
+    total = 0
+
+    try:
+        async for row in samsara.iter_safety_events(start_time=start,
+                                                    end_time=end,
+                                                    page_size=100):
+            total += 1
+            try:
+                ev = normalize_safety_event(row)
+            except Exception:
+                continue
+            t = ev.get("type") or "(empty)"
+            tn = ev.get("topic_name") or "(unmapped)"
+            by_type[t]  = by_type.get(t, 0) + 1
+            by_topic[tn] = by_topic.get(tn, 0) + 1
+            if ev.get("media_urls"):
+                with_media += 1
+            if total > 2000:
+                break
+    except SamsaraError as e:
+        await waiter.edit_text(f"❌ Samsara error: <code>{e}</code>")
+        return
+
+    if total == 0:
+        await waiter.edit_text(
+            f"ℹ️ No safety events returned by Samsara in the last {days}d."
+        )
+        return
+
+    lines = [f"📊 <b>{total}</b> event(s) over last {days}d, "
+             f"<b>{with_media}</b> with pre-attached media.\n"]
+    lines.append("<b>Raw Samsara type → count:</b>")
+    for t, c in sorted(by_type.items(), key=lambda x: -x[1]):
+        lines.append(f"• <code>{t}</code> × {c}")
+    lines.append("\n<b>Mapped topic → count:</b>")
+    for tn, c in sorted(by_topic.items(), key=lambda x: -x[1]):
+        lines.append(f"• {tn} × {c}")
+
+    await waiter.edit_text("\n".join(lines)[:4000])
+
+
 # ---------- /seed_each --------------------------------------------
 # Pull the LATEST event of each type we care about and post one to
 # each matching topic. Great for a smoke-test / showing the group what
