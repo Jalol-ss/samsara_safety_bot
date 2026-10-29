@@ -140,6 +140,68 @@ async def on_recent(message: Message, command: CommandObject,
 
 
 # ---------- /list_webhooks ------------------------------------------
+# ---------- /seed_each --------------------------------------------
+# Pull the LATEST event of each type we care about and post one to
+# each matching topic. Great for a smoke-test / showing the group what
+# each topic will look like without waiting for real incidents.
+@router.message(Command("seed_each"))
+async def on_seed_each(message: Message, command: CommandObject,
+                       samsara: SamsaraClient, app_state: State) -> None:
+    days = 7
+    if command.args:
+        try: days = max(1, min(int(command.args.split()[0]), 30))
+        except (ValueError, IndexError): pass
+
+    end   = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    waiter = await message.reply(
+        f"🌱 Seeding one event per topic from the last {days}d…"
+    )
+
+    # Walk recent events most-recent-first, keep first of each topic_name.
+    from engine.normalize import normalize_safety_event
+    picked: dict[str, dict] = {}  # topic_name -> raw event
+    scanned = 0
+    try:
+        async for row in samsara.iter_safety_events(start_time=start,
+                                                    end_time=end,
+                                                    page_size=100):
+            scanned += 1
+            try:
+                ev = normalize_safety_event(row)
+            except Exception:
+                continue
+            tn = ev.get("topic_name")
+            if tn and tn not in picked:
+                picked[tn] = row
+            if scanned > 2000:
+                break  # safety cap
+    except SamsaraError as e:
+        await waiter.edit_text(f"❌ Samsara error: <code>{e}</code>")
+        return
+
+    if not picked:
+        await waiter.edit_text(
+            f"ℹ️ No safety events found in the last {days}d. "
+            f"Try a wider window: <code>/seed_each 30</code>."
+        )
+        return
+
+    sent = 0
+    for tn, raw in picked.items():
+        try:
+            if await dispatch_event(message.bot, samsara, app_state, raw,
+                                    force=True):
+                sent += 1
+        except Exception:
+            logger.exception("seed_each failed for %r", tn)
+
+    await waiter.edit_text(
+        f"✅ Seeded <b>{sent}</b> topic(s) from the last {days}d "
+        f"(scanned {scanned} event(s))."
+    )
+
+
 @router.message(Command("list_webhooks"))
 async def on_list_webhooks(message: Message, samsara: SamsaraClient, app_state: State) -> None:
     try:

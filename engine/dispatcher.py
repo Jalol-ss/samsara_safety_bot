@@ -207,7 +207,8 @@ async def _resolve_video(ev: Dict[str, Any],
 
 
 async def dispatch_event(bot: Bot, samsara: SamsaraClient, state: State,
-                         raw_event: Dict[str, Any]) -> bool:
+                         raw_event: Dict[str, Any],
+                         force: bool = False) -> bool:
     """Normalize + post one event. Returns True if we sent something,
     False if we skipped (dedup, filtered, chat not configured).
 
@@ -230,7 +231,7 @@ async def dispatch_event(bot: Bot, samsara: SamsaraClient, state: State,
         # content hash so a retry doesn't double-post).
         ev["id"] = f"synth:{ev['type']}:{ev['vehicle_name']}:{ev['happened_at'].isoformat()}"
 
-    if state.is_seen(ev["id"]):
+    if not force and state.is_seen(ev["id"]):
         logger.info("Dedup: event %s already seen", ev["id"])
         return False
 
