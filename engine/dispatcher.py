@@ -67,39 +67,52 @@ def _should_forward(event_type: str) -> bool:
 
 
 def _fmt_header(ev: Dict[str, Any]) -> str:
-    """The caption that goes with the video / stand-alone message."""
-    header = f"🚨 <b>{ev['topic_name'].upper()}</b>"
-    unit = ev.get("unit_number") or ev.get("vehicle_name") or "?"
+    """The caption that goes with the video / stand-alone message.
+    Plain text — no emojis — in the order:
+        TOPIC
+        Unit #...
+        Driver: ...
+        Time: ...
+        Location: ...
+        Coordinates: lat, lon
+        Speed: ... mph (optional)
+    """
+    unit   = ev.get("unit_number") or ev.get("vehicle_name") or "?"
     driver = ev.get("driver_name") or ""
-    first_line = f"🚚 Unit <b>#{unit}</b>"
-    if driver:
-        first_line += f" · 👤 <b>{driver}</b>"
 
     ts: datetime = ev["happened_at"]
     when = ts.astimezone(timezone.utc).strftime("%b %d, %Y %H:%M UTC")
 
-    lines = [header, first_line, f"🕒 {when}"]
+    lines: list[str] = [
+        f"<b>{ev['topic_name'].upper()}</b>",
+        f"Unit #<b>{unit}</b>",
+    ]
+    if driver:
+        lines.append(f"Driver: <b>{driver}</b>")
+    lines.append(f"Time: {when}")
     if ev.get("location"):
-        lines.append(f"📍 {ev['location']}")
+        lines.append(f"Location: {ev['location']}")
+    if ev.get("lat") is not None and ev.get("lon") is not None:
+        lines.append(f"Coordinates: {ev['lat']:.6f}, {ev['lon']:.6f}")
     if ev.get("speed_mph") is not None:
-        lines.append(f"💨 {ev['speed_mph']} mph")
+        lines.append(f"Speed: {ev['speed_mph']} mph")
     return "\n".join(lines)
 
 
 def _build_kb(ev: Dict[str, Any]) -> Optional[InlineKeyboardMarkup]:
-    """Inline keyboard shown under the message — matches the 'Open
-    Samsara Report' button in your screenshot when a dashboard URL
-    is available."""
+    """Inline keyboard shown under the alert. Primary action is the
+    Samsara Report link; a secondary 'Open in Maps' row is added when
+    we have GPS coordinates. No emojis in button labels."""
     buttons: list[list[InlineKeyboardButton]] = []
     if ev.get("dashboard_url"):
         buttons.append([InlineKeyboardButton(
-            text="🔗 Open Samsara Report",
+            text="Samsara Report",
             url=ev["dashboard_url"],
         )])
     if ev.get("lat") is not None and ev.get("lon") is not None:
         maps_url = f"https://www.google.com/maps?q={ev['lat']},{ev['lon']}"
         buttons.append([InlineKeyboardButton(
-            text="🗺 Google Maps",
+            text="Open in Maps",
             url=maps_url,
         )])
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
